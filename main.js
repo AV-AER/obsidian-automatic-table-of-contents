@@ -139,7 +139,10 @@ function getMarkdownInlineFirstLevelFromHeadings(headings, options) {
 function getMarkdownHeading(heading, options) {
   if (options.includeLinks) {
     const cleaned = heading.heading.replaceAll('|', '-').replaceAll('[', '{').replaceAll(']', '}')
-    return `[[#${cleaned}]]`
+    const re_cleaned = cleaned.replace(/<(?:"[^"]*"['"]*|'[^']*'['"]*|[^'">])+>/g, '');
+    // shoddy attempt at implementing jayv's proposed fix (which is sorely needed)
+    // https://github.com/johansatge/obsidian-automatic-table-of-contents/issues/24
+    return `[[#${re_cleaned}]]`
   }
   return heading.heading
 }
