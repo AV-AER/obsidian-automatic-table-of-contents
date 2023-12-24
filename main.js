@@ -32,6 +32,21 @@ const availableOptions = {
     default: false,
     comment: 'Print debug info in Obsidian console',
   },
+  allowStyleHTML: {
+    type: 'boolean',
+    default: false,
+    comment: 'When includeLinks is false, allows HTML styling for headings',
+  },
+  includeMarkdownLinks: {
+    type: 'boolean',
+    default: true,
+    comment: 'When includeLinks is false, allows Markdown links in headings',
+  },
+  showMarkdownLinksInLinks: {
+    type: 'boolean',
+    default: false,
+    comment: 'Allows Markdown links in headings when links are also enabled.',
+  },
 }
 
 class ObsidianAutomaticTableOfContents extends Plugin {
@@ -136,15 +151,159 @@ function getMarkdownInlineFirstLevelFromHeadings(headings, options) {
   return items.length > 0 ? items.join(' | ') : null
 }
 
-function getMarkdownHeading(heading, options) {
-  if (options.includeLinks) {
-    const cleaned = heading.heading.replaceAll('|', '-').replaceAll('[', '{').replaceAll(']', '}')
-    const re_cleaned = cleaned.replace(/<(?:"[^"]*"['"]*|'[^']*'['"]*|[^'">])+>/g, '');
-    // shoddy attempt at implementing jayv's proposed fix (which is sorely needed)
-    // https://github.com/johansatge/obsidian-automatic-table-of-contents/issues/24
-    return `[[#${re_cleaned}]]`
+function stripHeadingHTML(header) {
+  return header.replace(/<(?:"[^"]*"['"]*|'[^']*'['"]*|[^'">])+>/g, '')
+  // Credit for intitial regex and raising this issue to begin with:
+  // https://github.com/johansatge/obsidian-automatic-table-of-contents/issues/24
+}
+
+function cleanInterruptingChars(header) {
+  return header.replaceAll('[', '').replaceAll(']', '').replaceAll('|', '')
+}
+
+function cleanHeaderLink(header) { // The alternative to killing a markdown link
+  return header.replaceAll('#', ' ').replaceAll(':', ' ')
+}
+
+// Removes '#' & ':' from [markdown](links), allowing parsing into display names
+function adjustMarkdownLink(header) {
+  let text = header.match(/\(([^)]*([:#])[^)]*)\)|([#])/g)
+  let to_replace = text
+  let removeds = []
+  if (text != null && text != undefined) { //TODO: refactor
+  const removeChar = (arr) => arr.forEach((value) => {
+    // Remove all #, and : if within parentheses
+    removeds.push(value.replaceAll('#', ' ').replaceAll(':', ' '))
+  })
+  removeChar(text)
+  
+  for (let i = 0; i < removeds.length; i++) {
+    //console.log(removeds[i])
+    header = header.replace(to_replace[i], removeds[i])
   }
-  return heading.heading
+  }
+  return header
+}
+
+// TODO: Markdown Link Remover 22.12.23 (COMPLETED:22.12.23)
+function removeMarkdownLink(header, mode) {
+  if (mode == 'PARTIAL') {
+    return adjustMarkdownLink(header)
+  }
+  if (mode == 'FULL') {
+    let text = header.match(/(?=(\[))+.([^[\]]+\])(?=(\([^()\]]+\)))/g)
+    let to_replace = header.match(/(\[[^\[\]]+\])(\([^()]+\))/g)
+    let segments = []
+    
+  
+    if ((text != null && text != undefined) && (to_replace != null && to_replace != undefined)) {
+      const removeChar = (arr) => arr.forEach((value) => {
+        // Slice is what to replace the corresponding match with
+        segments.push(value.slice(1, -1))
+      })
+      removeChar(text)
+  
+      for (let i = 0; i < segments.length; i++) {
+        //console.log(segments[i])
+        header = header.replace(to_replace[i], segments[i])
+      }
+    }
+  }
+  return header
+}
+
+function useHeadingDisplay(header) {
+  let display_name = header
+  if (header.includes('|')) {
+    let text = header.match(/(\[\[([^[\]]*)(.?)(\|)(.*?)\]\])/g)
+    let to_replace = header.match(/((?<=\|)([^\]]*))/g)
+    let segments = []
+    if ((text != null && text != undefined) && (to_replace != null && to_replace != undefined)) {
+      const removeChar = (arr) => arr.forEach((value) => {
+        segments.push("BONK")
+      })
+      removeChar(text)
+      for (let i = 0; i < segments.length; i++) {
+        console.log(segments[i])
+         display_name = display_name.replace(text[i],to_replace[i]) 
+      }
+    }
+  return display_name
+  }
+  return header
+}
+
+/**
+ * @summary Given a header, strips off double-bracket pairs where a # is found between them.
+ * @description
+ * This function should only be called to remove double-brackets when there is no display name left in the header.
+ * It does this for ALL sections within the same header.
+ * NOTE: This should probably just strip all double-bracket pairs, regardless of the content within.
+ * If the header parameter does not contain a '#', the function simply returns the input.
+ * @example [[NoteName#HeaderName]] -> NoteName#HeaderName
+ * @param {*} header 
+ * @returns {{header: str}} header
+ */
+function removeDoubleBracket(header) {
+  let text = header.match(/(\[\[([^[\]]*)(.?)(\#)(.*?)\]\])/g)
+  if (!text)
+    return header
+  for (const textSegments of text) {
+    const newText = textSegments.slice(2, -2)
+    header = header.replace(textSegments, newText)
+  }
+  return header
+}
+
+function getMarkdownHeading(heading, options) {
+  let header = heading.heading
+  
+  // Base flags
+  const _HTML = options.allowStyleHTML
+  const _Links = options.includeLinks
+  const _MarkdownLinks = options.includeMarkdownLinks
+  const _LinksWithMarkdown = options.showMarkdownLinksInLinks
+  
+  if (_MarkdownLinks && !_Links) {
+    if (!_HTML) {
+      header = stripHeadingHTML(header)
+    }
+    if (header.includes('#')) {
+      header = removeDoubleBracket(useHeadingDisplay(header))
+    }
+    if (header.includes("|")) {              // Check for a header display name
+        header = useHeadingDisplay(removeMarkdownLink(header, 'PARTIAL'))
+    }
+    return header // Final header
+  }
+
+  if (_HTML && !_Links && !_MarkdownLinks) {
+    return removeDoubleBracket(useHeadingDisplay(removeMarkdownLink(header, 'FULL')))
+  }
+
+  if (_HTML && !_Links) {
+    return removeDoubleBracket(useHeadingDisplay(removeMarkdownLink(header, 'FULL')))
+  }
+
+  if (!_HTML && !_Links && !_MarkdownLinks) {
+    return removeDoubleBracket(useHeadingDisplay(stripHeadingHTML(removeMarkdownLink(header, 'FULL'))))
+  }
+
+  if (_Links) {
+    let has_mdLink = (header.match(/(\[[^\[\]]+\])(\([^()]+\))/g))
+    // Preserve header link destination with "safe" version of header + a display name from [bracket content]
+    if ( has_mdLink != null && has_mdLink != undefined) {
+      /*if (!_HTML ) {
+        return `[[#${removeMarkdownLink(header, 'PARTIAL')}|${useHeadingDisplay(removeMarkdownLink(stripHeadingHTML(header), 'FULL'))}]]`
+      }*/
+      if (!_LinksWithMarkdown) {
+        return `[[#${removeMarkdownLink(header, 'PARTIAL')}|${useHeadingDisplay(removeMarkdownLink(stripHeadingHTML(header), 'FULL'))}]]`
+      }
+      return `[[#${cleanHeaderLink(cleanInterruptingChars(header))}|${cleanInterruptingChars(useHeadingDisplay(stripHeadingHTML(header)))}]]`
+    }
+  }
+  return `[[#${removeMarkdownLink(header, 'PARTIAL')}|${useHeadingDisplay(removeMarkdownLink(stripHeadingHTML(header), 'FULL'))}]]`
+  //return "Error" // You should never get to this point
 }
 
 function parseOptionsFromSourceText(sourceText = '') {
